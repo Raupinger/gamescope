@@ -119,8 +119,6 @@ struct xwayland_ctx_t
 		Atom gamescopeFPSLimit;
 		Atom gamescopeDynamicRefresh;
 
-		Atom gamescopeColorLinearGainRed;
-		Atom gamescopeColorLinearGainGreen;
-		Atom gamescopeColorLinearGainBlue;
+		Atom gamescopeColorLinearGain;
 	} atoms;
 };

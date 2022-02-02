@@ -1355,11 +1355,17 @@ inline int quantize( float fVal, float fMaxVal )
     return std::max( 0.f, std::min( fMaxVal, roundf( fVal * fMaxVal ) ) );
 }
 
-bool drm_set_color_gains(struct drm_t *drm, int idx, float gain)
+bool drm_set_color_gains(struct drm_t *drm, float *gains)
 {
-	drm->pending.color_gain[idx] = gain;
+	for (int i = 0; i < 3; i++)
+		drm->pending.color_gain[i] = gains[i];
 
-	return drm->current.color_gain[idx] != gain;
+	for (int i = 0; i < 3; i++)
+	{
+		if ( drm->current.color_gain[i] != drm->pending.color_gain[i] )
+			return true;
+	}
+	return false;
 }
 
 bool drm_update_gamma_lut(struct drm_t *drm)
