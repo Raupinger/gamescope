@@ -45,6 +45,8 @@ uint64_t g_uVBlankRateOfDecayPercentage = g_uDefaultVBlankRateOfDecayPercentage;
 
 const uint64_t g_uVBlankRateOfDecayMax = 100;
 
+std::atomic<uint64_t> rollingMaxDrawTime = { g_uStartingDrawTime };
+
 //#define VBLANK_DEBUG
 
 void vblankThreadRun( void )
@@ -52,7 +54,6 @@ void vblankThreadRun( void )
 	pthread_setname_np( pthread_self(), "gamescope-vblk" );
 
 	// Start off our average with our starting draw time.
-	uint64_t rollingMaxDrawTime = g_uStartingDrawTime;
 
 	const uint64_t range = g_uVBlankRateOfDecayMax;
 	while ( true )
@@ -69,11 +70,11 @@ void vblankThreadRun( void )
 		// eg. if we suddenly spike up (eg. because of test commits taking a stupid long time),
 		// we will then be able to deal with spikes in the long term, even if several commits after
 		// we get back into a good state and then regress again.
-		rollingMaxDrawTime = ( ( alpha * std::max( rollingMaxDrawTime, drawTime ) ) + ( range - alpha ) * drawTime ) / range;
+		rollingMaxDrawTime = ( ( alpha * std::max( rollingMaxDrawTime.load(), drawTime ) ) + ( range - alpha ) * drawTime ) / range;
 
 		// If we need to offset for our draw more than half of our vblank, something is very wrong.
 		// Clamp our max time to half of the vblank if we can.
-		rollingMaxDrawTime = std::min( rollingMaxDrawTime + g_uVblankDrawBufferRedZoneNS, nsecInterval / 2 ) - g_uVblankDrawBufferRedZoneNS;
+		rollingMaxDrawTime = std::min( rollingMaxDrawTime.load() + g_uVblankDrawBufferRedZoneNS, nsecInterval / 2 ) - g_uVblankDrawBufferRedZoneNS;
 
 		uint64_t offset = rollingMaxDrawTime + g_uVblankDrawBufferRedZoneNS;
 
@@ -169,6 +170,16 @@ void steamcompmgr_send_frame_done_to_focus_window();
 
 //#define FPS_LIMIT_DEBUG
 
+template <typename T, typename U = T>
+constexpr T align(T what, U to) {
+	return (what + to - 1) & ~(to - 1);
+}
+
+template <typename T, typename U = T>
+constexpr T alignDown(T what, U to) {
+	return (what / to) * to;
+}
+
 void fpslimitThreadRun( void )
 {
 	pthread_setname_np( pthread_self(), "gamescope-fps" );
@@ -211,8 +222,8 @@ void fpslimitThreadRun( void )
 			// If we have a slow frame, reset the deviation since we
 			// do not want to compensate for low performance later on
 			deviation = 0;
-			steamcompmgr_fpslimit_release_commit();
 			lastCommitReleased = get_time_in_nanos();
+			steamcompmgr_fpslimit_release_commit();
 
 			// If we aren't vblank aligned, send our frame callbacks here.
 			if ( !useFrameCallbacks )
@@ -220,23 +231,36 @@ void fpslimitThreadRun( void )
 		}
 		else
 		{
-			uint64_t now = get_time_in_nanos();
+			const int refresh = g_nNestedRefresh ? g_nNestedRefresh : g_nOutputRefresh;
 
-			uint64_t targetPoint = now + targetInterval - deviation - frameTime;
+			uint64_t targetPoint;
+			if ( refresh % nTargetFPS == 0 )
+			{
+				const uint64_t vblankInterval = 1'000'000'000ul / refresh;
+				uint64_t offset = rollingMaxDrawTime + g_uVblankDrawBufferRedZoneNS;
+				uint64_t lastVblank = g_lastVblank - offset;
+				targetPoint = lastVblank + targetInterval - deviation - frameTime - ( rollingMaxDrawTime + g_uVblankDrawBufferRedZoneNS );
+			}
+			else
+			{
+				targetPoint = t1 + targetInterval - deviation - frameTime;
+			}
 
-			while ( targetPoint < now )
+			while ( targetPoint < t1 )
 				targetPoint += targetInterval;
 
-			//fprintf( stderr, "Sleeping from %lu to %lu to reach %d fps\n", now, targetPoint, g_nFpsLimitTargetFPS );
-			sleep_until_nanos( targetPoint );
+			//fprintf( stderr, "Sleeping from %lu to %lu to reach %d fps\n", t1, targetPoint, g_nFpsLimitTargetFPS );
+			//sleep_until_nanos( targetPoint );
+			while ( get_time_in_nanos() < targetPoint )
+				continue;
 			t1 = get_time_in_nanos();
 
 			frameTime = t1 - t0;
 			deviation += frameTime - targetInterval;
 			deviation = std::min( deviation, targetInterval / 16 );
 
-			steamcompmgr_fpslimit_release_commit();
 			lastCommitReleased = get_time_in_nanos();
+			steamcompmgr_fpslimit_release_commit();
 
 			// If we aren't vblank aligned, send our frame callbacks here.
 			if ( !useFrameCallbacks )
@@ -277,10 +301,11 @@ bool fpslimit_use_frame_callbacks_for_focus_window( int nTargetFPS, int nVBlankC
 	if ( !nTargetFPS )
 		return true;
 
-	if ( g_nOutputRefresh % nTargetFPS == 0 )
+	const int refresh = g_nNestedRefresh ? g_nNestedRefresh : g_nOutputRefresh;
+	if ( refresh % nTargetFPS == 0 )
 	{
 		// Aligned, limit based on vblank count.
-		return nVBlankCount % ( g_nOutputRefresh / nTargetFPS );
+		return nVBlankCount % ( refresh / nTargetFPS );
 	}
 	else
 	{
