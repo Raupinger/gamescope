@@ -1701,7 +1701,7 @@ paint_all()
 
 	int nTargetRefresh = g_nSteamCompMgrTargetFPS && g_bDynamicRefreshEnabled && steamcompmgr_window_should_limit_fps( global_focus.focusWindow ) && !global_focus.overlayWindow
 		? g_nSteamCompMgrTargetFPS
-		: g_DRM.preferred_refresh;
+		: drm_get_default_refresh( &g_DRM );
 
 	uint64_t now = get_time_in_nanos();
 

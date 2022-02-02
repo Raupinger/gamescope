@@ -154,3 +154,4 @@ bool drm_set_refresh( struct drm_t *drm, int refresh );
 bool drm_set_resolution( struct drm_t *drm, int width, int height );
 
 char *find_drm_node_by_devid(dev_t devid);
+int drm_get_default_refresh(struct drm_t *drm);
